@@ -8,16 +8,20 @@ Test cases can be run with the following:
 import os
 import logging
 from unittest import TestCase
+
 from tests.factories import AccountFactory
+from service import talisman
 from service.common import status  # HTTP Status Codes
 from service.models import db, Account, init_db
 from service.routes import app
+
 
 DATABASE_URI = os.getenv(
     "DATABASE_URI", "postgresql://postgres:postgres@localhost:5432/postgres"
 )
 
 BASE_URL = "/accounts"
+HTTPS_ENVIRON = {"wsgi.url_scheme": "https"}
 
 
 ######################################################################
@@ -33,6 +37,7 @@ class TestAccountService(TestCase):
         app.config["DEBUG"] = False
         app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URI
         app.logger.setLevel(logging.CRITICAL)
+        talisman.force_https = False
         init_db(app)
 
     @classmethod
@@ -79,6 +84,21 @@ class TestAccountService(TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
+    def test_security_headers(self):
+        """It should return security headers"""
+        response = self.client.get("/", environ_overrides=HTTPS_ENVIRON)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        headers = {
+            "X-Frame-Options": "SAMEORIGIN",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'self'; object-src 'none'",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+        }
+
+        for key, value in headers.items():
+            self.assertEqual(response.headers.get(key), value)
+
     def test_health(self):
         """It should be healthy"""
         resp = self.client.get("/health")
@@ -92,7 +112,7 @@ class TestAccountService(TestCase):
         response = self.client.post(
             BASE_URL,
             json=account.serialize(),
-            content_type="application/json"
+            content_type="application/json",
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
@@ -119,15 +139,19 @@ class TestAccountService(TestCase):
         response = self.client.post(
             BASE_URL,
             json=account.serialize(),
-            content_type="test/html"
+            content_type="test/html",
         )
-        self.assertEqual(response.status_code, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
-    
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        )
+
     def test_get_account(self):
         """It should Read a single Account"""
         account = self._create_accounts(1)[0]
         resp = self.client.get(
-            f"{BASE_URL}/{account.id}", content_type="application/json"
+            f"{BASE_URL}/{account.id}",
+            content_type="application/json",
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         data = resp.get_json()
@@ -140,7 +164,7 @@ class TestAccountService(TestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         data = resp.get_json()
         self.assertEqual(len(data), 5)
-    
+
     def test_update_account(self):
         """It should Update an existing Account"""
         # create an Account to update
@@ -151,8 +175,12 @@ class TestAccountService(TestCase):
         # update the account
         new_account = resp.get_json()
         new_account["name"] = "Something Known"
-        resp = self.client.put(f"{BASE_URL}/{new_account['id']}", json=new_account)
+        resp = self.client.put(
+            f"{BASE_URL}/{new_account['id']}",
+            json=new_account,
+        )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
         updated_account = resp.get_json()
         self.assertEqual(updated_account["name"], "Something Known")
 
@@ -161,3 +189,5 @@ class TestAccountService(TestCase):
         account = self._create_accounts(1)[0]
         resp = self.client.delete(f"{BASE_URL}/{account.id}")
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+
+    
